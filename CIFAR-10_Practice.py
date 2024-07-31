@@ -50,10 +50,16 @@ class Net(nn.Module):
         self.conv4 = nn.Conv2d(192, 192, 3, padding='same')
         self.pool3 = nn.MaxPool2d(3, 2)
         self.conv5 = nn.Conv2d(192, 128, 1, padding='same')
-        self.fc1 = nn.Linear(1152, 512)  # 첫 번째 완전 연결 층
-        self.fc2 = nn.Linear(512, 256)  # 두 번째 완전 연결 층
+        self.fc1 = nn.Sequential(
+            nn.Linear(1152, 512),  # 첫 번째 완전 연결 층
+            nn.ReLU(),
+            nn.Dropout(0.5))  # 드롭아웃 레이어 추가
+        self.fc2 = nn.Sequential(
+            nn.Linear(512, 256),  # 두 번째 완전 연결 층
+            nn.ReLU(),
+            nn.Dropout(0.5))  # 드롭아웃 레이어 추가
         self.fc3 = nn.Linear(256, 10)  # 출력 층 (클래스 개수 10)
-        # TODO: padding=same 의 역할 알아오기
+        
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))  # 첫 번째 합성곱 후 ReLU 활성화 함수, 풀링 적용
         x = self.pool2(F.relu(self.conv2(x)))  # 두 번째 합성곱 후 ReLU 활성화 함수, 풀링 적용
@@ -63,13 +69,13 @@ class Net(nn.Module):
         x = F.relu(self.conv5(x))
 
         x = torch.flatten(x, 1)  # 배치 차원 제외 모든 차원을 평탄화
-        x = F.relu(self.fc1(x))  # 첫 번째 완전 연결 층 후 ReLU 활성화 함수 적용
-        x = F.relu(self.fc2(x))  # 두 번째 완전 연결 층 후 ReLU 활성화 함수 적용
+        x = self.fc1(x)  # 첫 번째 완전 연결 층
+        x = self.fc2(x)  # 두 번째 완전 연결 층
         x = self.fc3(x)  # 출력 층
         return x
 
 # 모델 학습 함수
-def train_model(net, trainloader, valloader, criterion, optimizer, num_epochs=10, checkpoint_interval=1):
+def train_model(net, trainloader, valloader, criterion, optimizer, scheduler, num_epochs=10, checkpoint_interval=1):
     train_losses = []
     val_losses = []
     train_accuracies = []
@@ -93,11 +99,9 @@ def train_model(net, trainloader, valloader, criterion, optimizer, num_epochs=10
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
             
-            if i % 10 == 0:  # 매 2000 미니배치마다 손실 출력
-                print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.6f}')
+            if i % 10 == 0:  # 매 10 미니배치마다 손실 출력
+                print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 10:.6f}')
                 running_loss = 0.0
-        
-        # TODO: Validation loss를  
         
         train_accuracy = 100 * correct / total
         train_losses.append(running_loss / len(trainloader))
@@ -124,6 +128,9 @@ def train_model(net, trainloader, valloader, criterion, optimizer, num_epochs=10
         print(f'Validation loss after epoch {epoch + 1}: {val_loss / len(valloader):.3f}')
         print(f'Accuracy of the network on the validation images after epoch {epoch + 1}: {val_accuracy:.2f}%')
 
+        # 학습률 조정
+        scheduler.step(val_loss / len(valloader))
+
         # 체크포인트 저장
         if (epoch + 1) % checkpoint_interval == 0:
             checkpoint_path = f'./checkpoint_epoch_{epoch + 1}.pth'
@@ -148,19 +155,23 @@ def calculate_accuracy(net, dataloader):
 
 # 메인 함수
 def main():
+    # Device configuration
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
     # 데이터 로딩
     trainloader, testloader, valloader, classes = load_data(batch_size=32)
     
     # 모델 생성
-    net = Net()
+    net = Net().to(device)
 
     # 손실 함수 및 옵티마이저 설정
     criterion = nn.CrossEntropyLoss()  # 교차 엔트로피 손실 함수
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)  # SGD 옵티마이저
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)  # 학습률 조정 스케줄러
 
     # 모델 학습
     num_epochs = 10
-    train_losses, val_losses, train_accuracies, val_accuracies = train_model(net, trainloader, valloader, criterion, optimizer, num_epochs)
+    train_losses, val_losses, train_accuracies, val_accuracies = train_model(net, trainloader, valloader, criterion, optimizer, scheduler, num_epochs)
 
     # 학습 및 검증 손실 시각화
     epochs = range(1, num_epochs + 1)
