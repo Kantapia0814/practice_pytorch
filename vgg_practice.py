@@ -6,8 +6,6 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import os
-import datetime
 
 # 이미지를 화면에 보여주기 위한 함수
 def imshow(img):
@@ -44,9 +42,9 @@ def load_data(batch_size=4, num_workers=2):
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 48, 5)  # 입력 채널 3, 출력 채널 48, 커널 크기 5인 첫 번째 합성곱 층
+        self.conv1 = nn.Conv2d(3, 48, 5)  # 입력 채널 3, 출력 채널 6, 커널 크기 5인 첫 번째 합성곱 층
         self.pool = nn.MaxPool2d(3, 2, 1)  # 커널 크기 2, 스트라이드 2인 최대 풀링 층
-        self.conv2 = nn.Conv2d(48, 128, 3, padding='same')  # 입력 채널 48, 출력 채널 128, 커널 크기 3인 두 번째 합성곱 층
+        self.conv2 = nn.Conv2d(48, 128, 3, padding='same')  # 입력 채널 6, 출력 채널 16, 커널 크기 5인 두 번째 합성곱 층
         self.pool2 = nn.MaxPool2d(2, 2)
         self.conv3 = nn.Conv2d(128, 192, 3, padding='same')
         self.conv4 = nn.Conv2d(192, 192, 3, padding='same')
@@ -77,20 +75,11 @@ class Net(nn.Module):
         return x
 
 # 모델 학습 함수
-def train_model(net, trainloader, valloader, criterion, optimizer, scheduler, device, num_epochs=10, checkpoint_interval=1, patience=5):
+def train_model(net, trainloader, valloader, criterion, optimizer, scheduler, num_epochs=10, checkpoint_interval=1):
     train_losses = []
     val_losses = []
     train_accuracies = []
     val_accuracies = []
-    early_stop_counter = 0
-    best_val_loss = float('inf')
-
-    # 로그 파일 생성
-    log_dir = './logs'
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f'training_log_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.txt')
-    with open(log_file, 'w') as f:
-        f.write(f'Model: {net}\n')
 
     for epoch in range(num_epochs):
         net.train()  # 모델을 학습 모드로 설정
@@ -99,7 +88,6 @@ def train_model(net, trainloader, valloader, criterion, optimizer, scheduler, de
         total = 0
         for i, data in enumerate(trainloader, 0):
             inputs, labels = data
-            inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()  # 기울기 초기화
             outputs = net(inputs)  # 모델 예측
             loss = criterion(outputs, labels)  # 손실 계산
@@ -128,7 +116,6 @@ def train_model(net, trainloader, valloader, criterion, optimizer, scheduler, de
         with torch.no_grad():  # 기울기 계산 중지
             for val_data in valloader:
                 val_inputs, val_labels = val_data
-                val_inputs, val_labels = val_inputs.to(device), val_labels.to(device)
                 val_outputs = net(val_inputs)
                 val_loss += criterion(val_outputs, val_labels).item()
                 _, val_predicted = torch.max(val_outputs, 1)
@@ -144,37 +131,22 @@ def train_model(net, trainloader, valloader, criterion, optimizer, scheduler, de
         # 학습률 조정
         scheduler.step(val_loss / len(valloader))
 
-        # Early Stopping
-        if val_loss / len(valloader) < best_val_loss:
-            best_val_loss = val_loss / len(valloader)
-            early_stop_counter = 0
-        else:
-            early_stop_counter += 1
-            if early_stop_counter >= patience:
-                print('Early stopping')
-                break
-
         # 체크포인트 저장
         if (epoch + 1) % checkpoint_interval == 0:
             checkpoint_path = f'./checkpoint_epoch_{epoch + 1}.pth'
             torch.save(net.state_dict(), checkpoint_path)
             print(f'Checkpoint saved at epoch {epoch + 1}')
-        
-        # 로그 파일에 기록
-        with open(log_file, 'a') as f:
-            f.write(f'Epoch {epoch + 1}/{num_epochs}, Train Loss: {train_losses[-1]}, Validation Loss: {val_losses[-1]}, Train Accuracy: {train_accuracy}, Validation Accuracy: {val_accuracy}\n')
 
     print('Finished Training')
     return train_losses, val_losses, train_accuracies, val_accuracies
 
 # 정확도 계산 함수
-def calculate_accuracy(net, dataloader, device):
+def calculate_accuracy(net, dataloader):
     correct = 0
     total = 0
     with torch.no_grad():  # 기울기 계산 중지
         for data in dataloader:
             images, labels = data
-            images, labels = images.to(device), labels.to(device)
             outputs = net(images)
             _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
@@ -195,11 +167,11 @@ def main():
     # 손실 함수 및 옵티마이저 설정
     criterion = nn.CrossEntropyLoss()  # 교차 엔트로피 손실 함수
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)  # SGD 옵티마이저
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)  # 학습률 조정 스케줄러
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10, verbose=True)  # 학습률 조정 스케줄러
 
     # 모델 학습
-    num_epochs = 50
-    train_losses, val_losses, train_accuracies, val_accuracies = train_model(net, trainloader, valloader, criterion, optimizer, scheduler, device, num_epochs)
+    num_epochs = 10
+    train_losses, val_losses, train_accuracies, val_accuracies = train_model(net, trainloader, valloader, criterion, optimizer, scheduler, num_epochs)
 
     # 학습 및 검증 손실 시각화
     epochs = range(1, num_epochs + 1)
@@ -218,7 +190,7 @@ def main():
     plt.plot(epochs, val_accuracies, label='Validation Accuracy')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy')
-    plt.legend()
+    plt.legend() # hi
     plt.title('Train and Validation Accuracy')
     
     plt.show()
@@ -247,18 +219,18 @@ def main():
     net.load_state_dict(torch.load(PATH))
 
     # 학습 데이터 예측 수행
-    train_outputs = net(train_images.to(device))
+    train_outputs = net(train_images)
     _, train_predicted = torch.max(train_outputs, 1)
     print('Train Predicted: ', ' '.join(f'{classes[train_predicted[j]]:5s}' for j in range(4)))
 
     # 테스트 데이터 예측 수행
-    test_outputs = net(test_images.to(device))
+    test_outputs = net(test_images)
     _, test_predicted = torch.max(test_outputs, 1)
     print('Test Predicted: ', ' '.join(f'{classes[test_predicted[j]]:5s}' for j in range(4)))
 
     # 모델의 전체 정확도 계산
-    train_accuracy = calculate_accuracy(net, trainloader, device)
-    test_accuracy = calculate_accuracy(net, testloader, device)
+    train_accuracy = calculate_accuracy(net, trainloader)
+    test_accuracy = calculate_accuracy(net, testloader)
     print(f'Accuracy of the network on the train images: {train_accuracy:.2f}%')
     print(f'Accuracy of the network on the test images: {test_accuracy:.2f}%')
 
